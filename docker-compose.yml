@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    platform: linux/amd64
+    ports: ["8000:8000"]
+    volumes: ["smt-data:/data"]
+    environment:
+      SMT_RETENTION_HOURS: "24"
+      SMT_WORKERS: "2"
+    restart: unless-stopped
+volumes:
+  smt-data:

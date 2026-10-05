@@ -292,18 +292,12 @@ def make_thumbnail(src: Path, dst: Path, width: int = 1200) -> None:
     img.save(dst, format="PNG", optimize=True)
 
 
-def images_to_pdf(images: list[Path], out: Path, dpi: int = 300) -> Path:
-    """Bundle page images into one PDF (one book for the OMR engine)."""
-    doc = pymupdf.open()
-    for p in images:
-        img = pymupdf.open(str(p))
-        rect = img[0].rect
-        pdfbytes = img.convert_to_pdf()
-        img.close()
-        imgpdf = pymupdf.open("pdf", pdfbytes)
-        page = doc.new_page(width=rect.width * 72 / dpi, height=rect.height * 72 / dpi)
-        page.show_pdf_page(page.rect, imgpdf, 0)
-        imgpdf.close()
-    doc.save(str(out))
-    doc.close()
+def images_to_tiff(images: list[Path], out: Path, dpi: int = 300) -> Path:
+    """Bundle page images into one lossless multi-page TIFF (one book for the OMR engine).
+
+    Pixels reach the engine exactly as preprocessed; earlier versions wrapped the
+    images in a PDF, which the engine re-rendered and which measurably hurt accuracy.
+    """
+    frames = [Image.open(p).convert("L") for p in images]
+    frames[0].save(out, format="TIFF", save_all=True, append_images=frames[1:], compression="tiff_lzw", dpi=(dpi, dpi))
     return out

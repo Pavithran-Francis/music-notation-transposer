@@ -22,7 +22,7 @@ from pathlib import Path
 from lxml import etree
 
 from app.services.omr.base import OMREngine, OMRError, OMRResult, ProgressCallback
-from app.services.omr.preprocess import images_to_pdf
+from app.services.omr.preprocess import images_to_tiff
 
 STEP_LABELS = {
     "LOAD": "Loading page", "BINARY": "Binarizing", "SCALE": "Measuring staff spacing",
@@ -57,13 +57,16 @@ class AudiverisEngine(OMREngine):
         except Exception:
             return None
 
-    def recognize(self, pages: list[Path], workdir: Path, progress: ProgressCallback) -> OMRResult:
+    def recognize(self, pages: list[Path], workdir: Path, progress: ProgressCallback,
+                  source_pdf: Path | None = None) -> OMRResult:
         if not self.is_available():
             raise OMRError(
                 "The Audiveris OMR engine is not installed. Install it (see README) or upload MusicXML instead."
             )
         workdir.mkdir(parents=True, exist_ok=True)
-        book = images_to_pdf(pages, workdir / "book.pdf")
+        # A vector PDF rendered by Audiveris itself gives the best results; otherwise
+        # hand over the preprocessed pixels losslessly.
+        book = source_pdf if source_pdf is not None else images_to_tiff(pages, workdir / "book.tif")
         out_dir = workdir / "out"
         out_dir.mkdir(exist_ok=True)
         cmd = [self.executable, "-batch", "-export", "-save", "-output", str(out_dir), "--", str(book)]

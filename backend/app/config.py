@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     audiveris_path: str | None = None
     audiveris_timeout_per_page: int = 180
+    homr_path: str | None = None  # second OMR engine (ensemble); auto-detected in tools/homr-venv
+    homr_timeout_per_page: int = 300
+    omr_ensemble: bool = True
     mscore_path: str | None = None
     mscore_timeout: int = 180
     omr_confidence_threshold: float = 0.75
@@ -53,6 +56,30 @@ class Settings(BaseSettings):
             "audiveris",
             "Audiveris",
         ])
+
+    def resolved_homr(self) -> str | None:
+        return _first_existing([
+            self.homr_path,
+            REPO_DIR / "tools/homr-venv/bin/homr",
+            REPO_DIR / "tools/homr-venv/Scripts/homr.exe",
+            "/opt/homr/bin/homr",
+        ])
+
+    @staticmethod
+    def audiveris_tessdata_dir() -> Path:
+        """Where Audiveris looks for Tesseract OCR language files (titles, lyrics, text)."""
+        import os
+        import sys
+
+        if sys.platform == "darwin":
+            return Path.home() / "Library/Application Support/AudiverisLtd/audiveris/tessdata"
+        if sys.platform.startswith("win"):
+            return Path(os.environ.get("APPDATA", Path.home())) / "AudiverisLtd/audiveris/tessdata"
+        return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "AudiverisLtd/audiveris/tessdata"
+
+    def ocr_languages(self) -> list[str]:
+        d = self.audiveris_tessdata_dir()
+        return sorted(p.stem for p in d.glob("*.traineddata")) if d.exists() else []
 
     def resolved_mscore(self) -> str | None:
         return _first_existing([

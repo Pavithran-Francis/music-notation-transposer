@@ -12,7 +12,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db import HistoryEntry, Job, Project, add_history, new_id, session
 from app.services import jobs, pipeline, storage
-from app.services.omr.service import default_engine
+from app.services.omr.service import default_engine, secondary_engine
 from app.services.pipeline import PipelineError
 from app.services.rendering import service as render
 from core.corrections import CorrectionError, note_details, validate_operation
@@ -78,10 +78,16 @@ def _guard(fn, *args, **kwargs):
 @router.get("/health", tags=["system"])
 def health() -> dict:
     engine = default_engine()
+    second = secondary_engine()
     s = get_settings()
     return {
         "status": "ok",
-        "omr": {"engine": engine.name, "available": engine.is_available()},
+        "omr": {
+            "engine": engine.name + (f" + {second.name}" if second else ""),
+            "available": engine.is_available(),
+            "secondary": second.name if second else None,
+            "ocr_languages": s.ocr_languages(),
+        },
         "musescore": {"available": render.mscore_available(), "path": s.resolved_mscore()},
         "renderer": "MuseScore" if render.mscore_available() else "Verovio",
         "limits": {"max_upload_mb": s.max_upload_mb, "max_pdf_pages": s.max_pdf_pages},
@@ -319,7 +325,9 @@ def get_analysis(project_id: str) -> dict:
 
 class Correction(BaseModel):
     op: Literal["set_pitch", "to_rest", "to_note", "delete_chord_note", "set_duration", "set_key", "set_time",
-                "set_clef"]
+                "set_clef", "set_metadata"]
+    title: str | None = Field(None, max_length=300)
+    composer: str | None = Field(None, max_length=300)
     note_id: str | None = None
     step: str | None = None
     alter: int | None = None

@@ -23,6 +23,10 @@ class OMRResult:
     # Shape is engine specific but consumed through `confidence_for_score`.
     raw_confidence: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # Present when a second engine's reading was merged in (see core.omr_merge).
+    merge: dict | None = None
+    # Multi-measure rests found, with the count read from the page image.
+    multirests: list[dict] = field(default_factory=list)
 
 
 class OMREngine(ABC):
@@ -32,8 +36,13 @@ class OMREngine(ABC):
     def is_available(self) -> bool: ...
 
     @abstractmethod
-    def recognize(self, pages: list[Path], workdir: Path, progress: ProgressCallback) -> OMRResult:
-        """Recognize the given preprocessed page images (in order) into MusicXML."""
+    def recognize(self, pages: list[Path], workdir: Path, progress: ProgressCallback,
+                  source_pdf: Path | None = None) -> OMRResult:
+        """Recognize the given preprocessed page images (in order) into MusicXML.
+
+        `source_pdf`, when given, is the untouched original PDF with exactly these
+        pages; engines that render PDFs themselves get better input from it.
+        """
 
     def describe(self) -> dict:
         return {"name": self.name, "available": self.is_available()}

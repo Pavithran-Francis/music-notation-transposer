@@ -85,6 +85,37 @@ def confidence_for_score(tree: etree._ElementTree, raw: dict) -> dict:
     }
 
 
+AGREED_CONFIDENCE = 0.97
+RESOLVED_CONFIDENCE = 0.85  # disagreement settled by hard evidence
+DISPUTED_CONFIDENCE = 0.6  # judgement call: shown for review
+
+
+def apply_merge(confidence: dict, tree: etree._ElementTree, merge: dict | None) -> dict:
+    """Fold the two-engine merge decisions into per-note confidence.
+
+    Measures where both engines read identical notes are very likely right;
+    measures that had to be resolved are capped below the review threshold so
+    they always appear in the review list.
+    """
+    if not merge or not merge.get("applied"):
+        return confidence
+    decisions = {m["out_index"]: m for m in merge.get("measures", []) if m.get("out_index") is not None}
+    notes = dict(confidence.get("notes", {}))
+    for pw in walk(tree):
+        for ev in pw.notes:
+            d = decisions.get(ev.measure_index)
+            if d is None or not ev.id:
+                continue
+            c = notes.get(ev.id, 1.0)
+            if d.get("weak"):
+                notes[ev.id] = min(c, DISPUTED_CONFIDENCE)
+            elif d["source"] == "agree" and not d["disputed"]:
+                notes[ev.id] = max(c, AGREED_CONFIDENCE)
+            elif d["disputed"]:
+                notes[ev.id] = max(c, RESOLVED_CONFIDENCE)
+    return {**confidence, "notes": notes, "merge": merge}
+
+
 def review_items(tree: etree._ElementTree, confidence: dict | None, threshold: float) -> dict:
     """Build the recognition summary and the list of items needing review."""
     items = []
@@ -116,6 +147,34 @@ def review_items(tree: etree._ElementTree, confidence: dict | None, threshold: f
                 "reason": issue.message,
                 "severity": issue.severity,
             })
+    merge = (confidence or {}).get("merge") or {}
+    if merge.get("applied"):
+        part_id = walks[0].part_id if walks else None
+        weak_measures = set()
+        prev = None
+        for d in merge.get("measures", []):
+            if d.get("out_index") is None:
+                continue
+            base = {"kind": "measure", "part_id": part_id, "measure": d["number"], "measure_index": d["out_index"]}
+            if d.get("weak"):
+                weak_measures.add(d["out_index"])
+                items.append(base | {"confidence": DISPUTED_CONFIDENCE, "severity": "warning",
+                                     "reason": "Recognition engines disagreed: " + d["reason"]})
+            # signature corrections: listed once, where they begin
+            for flag, label in (("time_changed", "Time signature"), ("key_changed", "Key signature")):
+                if d.get(flag) and not (prev and prev.get(flag)):
+                    items.append(base | {"confidence": None, "severity": "info",
+                                         "reason": f"{label} corrected here by cross-checking both recognition engines"})
+            prev = d
+        # one item per uncertain measure instead of one per note
+        items[:] = [i for i in items if not (i["kind"] == "note" and i.get("measure_index") in weak_measures)]
+    for mr in (confidence or {}).get("multirests") or []:
+        if mr.get("flagged"):
+            items.append({"kind": "measure", "part_id": walks[0].part_id if walks else None,
+                          "measure": mr.get("measure"), "measure_index": mr.get("index"),
+                          "confidence": mr.get("confidence"), "severity": "warning",
+                          "reason": f"Multi-measure rest: the number of bars ({mr.get('count')}) could not be "
+                                    "read reliably from the page — please check"})
     hdr = (confidence or {}).get("header", {})
     for k, label in (("clef", "Clef"), ("key", "Key signature"), ("time", "Time signature")):
         v = hdr.get(k)

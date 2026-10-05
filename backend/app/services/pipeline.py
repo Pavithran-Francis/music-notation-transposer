@@ -19,9 +19,10 @@ from app.config import get_settings
 from app.db import Project, add_history, session
 from app.services import storage
 from app.services.omr.base import OMRError
-from app.services.omr.confidence import confidence_for_score, review_items
+from app.services.omr.confidence import apply_merge, confidence_for_score, review_items
 from app.services.omr.service import OMRService
 from app.services.rendering import service as render
+from core import metadata
 from core.analysis import analyze
 from core.corrections import apply_corrections
 from core.instruments.database import resolve_instrument
@@ -197,6 +198,8 @@ def run_analyze(project_id: str, progress) -> None:
             recognition["engine"] = result.engine
             recognition["warnings"] = result.warnings
             confidence = result.raw_confidence
+            recognition["merge"] = result.merge
+            recognition["multirests"] = result.multirests
 
     progress("validating", "Checking musical structure…", 0.92)
     try:
@@ -204,9 +207,14 @@ def run_analyze(project_id: str, progress) -> None:
     except MusicXMLError as e:
         raise PipelineError(str(e))
     ensure_note_ids(tree)
+    metadata.normalize(tree)
+    if kind in ("pdf", "image"):
+        metadata.strip_scan_layout(tree)
     storage.write_bytes(project_id, "source.musicxml", to_bytes(tree))
     if confidence is not None:
-        storage.write_json(project_id, "confidence.json", confidence_for_score(tree, confidence))
+        conf = apply_merge(confidence_for_score(tree, confidence), tree, recognition.get("merge"))
+        conf["multirests"] = recognition.get("multirests") or []
+        storage.write_json(project_id, "confidence.json", conf)
     else:
         storage.remove(project_id, "confidence.json")
 
@@ -355,7 +363,7 @@ def rebuild_final(project_id: str) -> None:
     issues = check_range(final, target)
     validation = compare_transposition(
         parse_musicxml(corrected), final, result["transposition"]["semitones"], shifts,
-        part_ids=_options(settings).part_ids, target_name=target.name,
+        part_ids=_options(settings).part_ids, target_name=metadata.display_name(target.name),
     )
     kept = {nid for act in actions if act["kind"] == "keep" for nid in act.get("note_ids", [])}
     result.update({

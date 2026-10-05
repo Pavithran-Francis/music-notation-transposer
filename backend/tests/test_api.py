@@ -172,6 +172,10 @@ def test_omr_png_end_to_end(client, tmp_path):
     a = client.get(f"/api/projects/{pid}/analysis").json()
     assert a["analysis"]["key"] == "D major" and a["analysis"]["notes"] == 13
     assert a["recognition"]["review"]["summary"]["overall"] > 0.7
+    from app.services.omr.service import secondary_engine
+    if secondary_engine() is not None:  # two-engine recognition must actually have been applied
+        assert a["recognition"]["merge"]["applied"], a["recognition"]["merge"]
+        assert "+" in a["recognition"]["engine"]
     job = wait(client, client.post(f"/api/projects/{pid}/transpose", json={
         "source_instrument": {"id": "trumpet_bb"}, "target_instrument": {"id": "alto_sax"}}).json()["job_id"])
     assert job["status"] == "succeeded", job

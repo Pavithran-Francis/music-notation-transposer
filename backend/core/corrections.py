@@ -231,6 +231,14 @@ def apply_operation(root: etree._Element, op: dict) -> None:
             if clef.octave_change:
                 etree.SubElement(el, "clef-octave-change").text = str(clef.octave_change)
             insert_ordered(attrs, el, ATTRIBUTES_ORDER)
+    elif kind == "set_metadata":
+        from core.metadata import set_metadata
+
+        title, composer = op.get("title"), op.get("composer")
+        for v in (title, composer):
+            if v is not None and len(v) > 300:
+                raise CorrectionError("Title and composer must be at most 300 characters.")
+        set_metadata(etree.ElementTree(root), title, composer)
     else:
         raise CorrectionError(f"Unknown correction operation '{kind}'.")
 

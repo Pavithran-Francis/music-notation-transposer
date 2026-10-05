@@ -49,6 +49,7 @@ def _toolkit(page_width: int, page_height: int, scale: int, reflow: bool) -> ver
         "svgViewBox": True,
         "svgRemoveXlink": True,
         "mnumInterval": 1,
+        "multiRestStyle": "block",
     })
     return tk
 
@@ -84,12 +85,27 @@ def _mscore_env() -> dict:
     return env
 
 
-def _run_mscore(src: Path, dst: Path) -> None:
+_MSCORE_STYLE = """<?xml version="1.0" encoding="UTF-8"?>
+<museScore version="4.40">
+  <Style>
+    <createMultiMeasureRests>1</createMultiMeasureRests>
+  </Style>
+</museScore>
+"""
+
+
+def _run_mscore(src: Path, dst: Path, multirests: bool = False) -> None:
     exe = get_settings().resolved_mscore()
     if not exe:
         raise RenderError("MuseScore is not installed.")
+    cmd = [exe, "-o", str(dst), str(src)]
+    if multirests:
+        # Engrave consecutive rest measures as multi-measure rests, as instrumental parts are printed.
+        style = src.with_name("parts.mss")
+        style.write_text(_MSCORE_STYLE)
+        cmd = [exe, "-S", str(style), "-o", str(dst), str(src)]
     try:
-        r = subprocess.run([exe, "-o", str(dst), str(src)], capture_output=True, text=True,
+        r = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=get_settings().mscore_timeout, env=_mscore_env())
     except subprocess.TimeoutExpired as e:
         raise RenderError("MuseScore timed out while rendering.") from e
@@ -99,13 +115,15 @@ def _run_mscore(src: Path, dst: Path) -> None:
 
 def render_pdf(musicxml: bytes, engine: str = "auto") -> tuple[bytes, str]:
     """Return (pdf_bytes, engine_used)."""
-    clean = to_bytes(parse_musicxml(musicxml), strip_ids=True)
+    tree = parse_musicxml(musicxml)
+    clean = to_bytes(tree, strip_ids=True)
+    multirests = tree.getroot().find(".//multiple-rest") is not None
     if engine in ("auto", "musescore") and mscore_available():
         try:
             with tempfile.TemporaryDirectory() as d:
                 src, dst = Path(d) / "score.musicxml", Path(d) / "score.pdf"
                 src.write_bytes(clean)
-                _run_mscore(src, dst)
+                _run_mscore(src, dst, multirests)
                 return dst.read_bytes(), "MuseScore"
         except RenderError:
             if engine == "musescore":

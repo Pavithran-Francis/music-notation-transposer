@@ -132,16 +132,12 @@ def analyze(tree: etree._ElementTree) -> dict:
                     pass
                 break
 
-    title = (root.findtext("work/work-title") or root.findtext("movement-title") or "").strip()
-    if not title:
-        for cw in root.findall("credit/credit-words"):
-            if cw.text and cw.text.strip():
-                title = cw.text.strip()
-                break
-    composer = ""
-    for cr in root.findall("identification/creator"):
-        if cr.get("type") == "composer" and cr.text:
-            composer = cr.text.strip()
+    from core.metadata import read_metadata
+    from core.multirest import count_measures_rests
+
+    meta = read_metadata(tree)
+    title, composer = meta["title"], meta["composer"]
+    multirests = count_measures_rests(tree)
 
     lyrics = sum(1 for _ in root.iter("lyric"))
     harmonies = sum(1 for _ in root.iter("harmony"))
@@ -170,6 +166,7 @@ def analyze(tree: etree._ElementTree) -> dict:
         "voices": len(voices),
         "key_changes": key_changes,
         "time_changes": time_changes,
+        "multirests": multirests,
         "features": {
             "lyrics": lyrics, "chord_symbols": harmonies, "dynamics": dynamics,
             "articulations": articulations, "slurs": slurs, "ties": ties, "tuplets": tuplets,

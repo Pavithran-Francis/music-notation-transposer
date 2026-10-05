@@ -27,6 +27,7 @@ from typing import Iterable
 from lxml import etree
 
 from core.instruments.database import Instrument
+from core.metadata import display_name, write_header
 from core.music.clefs import CLEFS
 from core.music.pitch import Interval, Pitch, choose_spelling, key_alterations, key_name
 from core.musicxml.document import (
@@ -157,7 +158,7 @@ def _update_part_metadata(root: etree._Element, part: etree._Element, target: In
         name = sp.find("part-name")
         if name is None:
             name = etree.SubElement(sp, "part-name")
-        name.text = target.name
+        name.text = display_name(target.name)
         for tag in ("part-name-display", "part-abbreviation-display"):
             for el in sp.findall(tag):
                 sp.remove(el)
@@ -170,7 +171,7 @@ def _update_part_metadata(root: etree._Element, part: etree._Element, target: In
         for si in sp.findall("score-instrument"):
             iname = si.find("instrument-name")
             if iname is not None:
-                iname.text = target.name
+                iname.text = display_name(target.name)
             for el in si.findall("instrument-sound"):
                 si.remove(el)
         for mi in sp.findall("midi-instrument"):
@@ -291,6 +292,7 @@ def transpose_pitches(
                 elif tag == "harmony":
                     _transpose_harmony(el, current)
         _update_part_metadata(root, part, target)
+    write_header(out, display_name(target.name))
     return out, info
 
 

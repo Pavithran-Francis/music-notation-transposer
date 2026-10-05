@@ -130,7 +130,8 @@ def test_golden(case):
     for a, b in zip(walk(inp)[0].notes, walk(out)[0].notes):
         if a.pitch:
             assert a.pitch.transpose(src.interval).semitones == b.pitch.transpose(tgt.interval).semitones
-    report = compare_transposition(inp, out, info.semitones, target_name=tgt.name)
+    from core.metadata import display_name
+    report = compare_transposition(inp, out, info.semitones, target_name=display_name(tgt.name))
     assert report.passed, report.to_dict()
 
 
@@ -185,7 +186,7 @@ class TestEngine:
         out, _, _ = transpose_score(t, get_instrument("flute"), get_instrument("tenor_sax"))
         tr = out.getroot().find("part/measure/attributes/transpose")
         assert (tr.findtext("diatonic"), tr.findtext("chromatic"), tr.findtext("octave-change")) == ("-1", "-2", "-1")
-        assert out.getroot().findtext("part-list/score-part/part-name") == "Tenor Saxophone in Bb"
+        assert out.getroot().findtext("part-list/score-part/part-name") == "Tenor Saxophone in B♭"
         # back to a C instrument: transpose element removed
         back, _, _ = transpose_score(out, get_instrument("tenor_sax"), get_instrument("flute"))
         assert back.getroot().find(".//transpose") is None

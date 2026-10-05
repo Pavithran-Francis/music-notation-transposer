@@ -27,12 +27,27 @@ if [[ "$(uname)" == "Darwin" && ! -d tools/Audiveris.app && ! -d /Applications/A
   xattr -dr com.apple.quarantine tools/Audiveris.app 2>/dev/null || true
 fi
 
+echo "==> OCR language data for Audiveris (titles, tempo text, lyrics)"
+TESS=$(backend/.venv/bin/python -c 'import sys; sys.path.insert(0,"backend"); from app.config import Settings; print(Settings.audiveris_tessdata_dir())')
+mkdir -p "$TESS"
+[[ -f "$TESS/eng.traineddata" ]] || curl -fL -o "$TESS/eng.traineddata" https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata
+
+echo "==> Second OMR engine (homr) in tools/homr-venv"
+if [[ ! -x tools/homr-venv/bin/homr ]]; then
+  "$PY" -m venv tools/homr-venv
+  tools/homr-venv/bin/pip install -q --upgrade pip
+  tools/homr-venv/bin/pip install -q "homr==0.7.0"
+fi
+tools/homr-venv/bin/homr --init >/dev/null 2>&1 || echo "  (homr model download failed; recognition will use Audiveris only)"
+
 echo "==> Checking external tools"
 backend/.venv/bin/python - <<'PY'
 import sys; sys.path.insert(0, "backend")
 from app.config import get_settings
 s = get_settings()
 print("  Audiveris:", s.resolved_audiveris() or "NOT FOUND (PDF/image recognition disabled; MusicXML still works)")
+print("  homr:     ", s.resolved_homr() or "not found (single-engine recognition)")
+print("  OCR langs:", ", ".join(s.ocr_languages()) or "NONE (titles/text will not be recognized)")
 print("  MuseScore:", s.resolved_mscore() or "not found (PDFs will be engraved with Verovio instead)")
 PY
 echo "Done. Start with: scripts/dev.sh"

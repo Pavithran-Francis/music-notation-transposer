@@ -12,3 +12,4 @@ frontend/dist/
 tools/
 # OS
 .DS_Store
+backend/benchmarks/out/

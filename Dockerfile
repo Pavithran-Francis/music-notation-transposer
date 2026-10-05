@@ -20,6 +20,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends /tmp/audiveris.deb \
     && rm -rf /tmp/audiveris.deb /var/lib/apt/lists/*
 RUN useradd --create-home --uid 10001 app && mkdir -p /data && chown app /data
+# Second OMR engine (homr) in its own venv, with models pre-downloaded.
+RUN python3 -m venv /opt/homr && /opt/homr/bin/pip install --no-cache-dir homr==0.7.0 && /opt/homr/bin/homr --init \
+    && chmod -R a+rX /opt/homr
+ENV SMT_HOMR_PATH=/opt/homr/bin/homr
+# OCR language data so Audiveris can read titles, tempo text and lyrics.
+RUN mkdir -p /home/app/.config/AudiverisLtd/audiveris/tessdata \
+    && curl -fsSL -o /home/app/.config/AudiverisLtd/audiveris/tessdata/eng.traineddata \
+       https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata \
+    && chown -R app /home/app/.config
 WORKDIR /app/backend
 COPY backend/requirements.txt ./
 RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r requirements.txt

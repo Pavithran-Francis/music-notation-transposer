@@ -51,6 +51,8 @@ Open http://127.0.0.1:5173. Try `samples/little-waltz-flute.pdf` (a printed one-
 | Python 3.11+ | backend | `scripts/setup.sh` creates `backend/.venv` and installs `backend/requirements.txt` |
 | Node.js 20+ | frontend build | Vite + React + TypeScript |
 | **Audiveris 5.x** | OMR for PDF / images | Bundles its own Java runtime. Optional: without it, MusicXML/MuseScore uploads still work |
+| Tesseract `eng.traineddata` | Audiveris text OCR (titles, tempo text, lyrics) | Placed in Audiveris's `tessdata` folder by `scripts/setup.sh` |
+| **homr 0.7** (optional) | second OMR engine (ensemble) | Installed by `scripts/setup.sh` into `tools/homr-venv` (~420 MB incl. models) |
 | **MuseScore 4 (or 3)** | best PDF engraving, `.mscz` import | Optional: without it PDFs are engraved by Verovio |
 | Cairo (`libcairo2` / `brew install cairo`) | Verovio PDF fallback | Used only when MuseScore is not installed |
 
@@ -149,6 +151,9 @@ All variables are optional (prefix `SMT_`, also read from `backend/.env`; see `b
 | `SMT_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | allowed browser origins (dev) |
 | `SMT_AUDIVERIS_PATH` | auto | Audiveris executable |
 | `SMT_AUDIVERIS_TIMEOUT_PER_PAGE` | `180` | seconds |
+| `SMT_HOMR_PATH` | auto (`tools/homr-venv/bin/homr`) | second OMR engine |
+| `SMT_HOMR_TIMEOUT_PER_PAGE` | `300` | seconds |
+| `SMT_OMR_ENSEMBLE` | `true` | set `false` to use Audiveris only |
 | `SMT_MSCORE_PATH` | auto | MuseScore executable |
 | `SMT_MSCORE_TIMEOUT` | `180` | seconds |
 | `SMT_OMR_CONFIDENCE_THRESHOLD` | `0.75` | notes below this are listed for review |
@@ -186,37 +191,106 @@ Choices, and why:
 
 ## OMR engine (Optical Music Recognition)
 
-**Audiveris 5.11** was chosen after evaluating the options. It is the most mature open-source OMR engine for printed
-music: it handles multiple voices, chords, tuplets, slurs, dynamics, lyrics and multi-page books, and exports
-MusicXML. Alternatives were rejected: oemer (deep-learning, single-staff focus, weaker on rhythm), OpenOMR
-(unmaintained), and cloud APIs (privacy, cost).
+Recognition uses **two engines and merges their readings**, because each fails in different ways:
 
-It sits behind `OMREngine` (`app/services/omr/base.py`); `OMRService` exposes `parse_document()`,
-`recognize_pages()` and `export_musicxml()`, so another engine can be plugged in without touching the rest.
+| | Audiveris 5.11 (primary) | homr 0.7 (secondary) |
+|---|---|---|
+| Strengths | text (title, composer, via Tesseract OCR), dynamics, slurs, articulations, rehearsal marks, multi-staff | notes, rhythms, accidentals, whole notes, robust on scans and photos |
+| Weaknesses | misses some whole notes and mid-line time signatures, then **drops notes** to fit the wrong meter; misreads clefs on poor scans | ignores most text and markings; only the time-signature *denominator* is reliable; invents measures from courtesy signatures |
+
+Both engines sit behind `OMREngine` (`app/services/omr/base.py`). `OMRService` runs them in parallel, and
+`core/omr_merge.py` merges the two readings measure by measure:
+
+- **Alignment.** Measures are aligned by sequence alignment on pitches, and on interval contour too, so a
+  clef misread doesn't break it.
+- **Phantom measures** are removed. These are empty measures, and courtesy signatures at line ends or line
+  headers read as notes. Any key, time or direction they carried moves on to the next measure.
+- **Time signatures** are a stateful sweep:
+  - Audiveris's signature is kept while its content fills it.
+  - homr's denominator change is trusted when Audiveris saw none.
+  - Otherwise the signature is inferred from the measure content: five quarter notes over a /4 means 5/4.
+- **Key signatures:** an explicit change seen by either engine beats the other's silence. When the engines
+  report different keys, the key that makes the notes most diatonic wins.
+- **Notes:**
+  - Identical readings are accepted.
+  - Otherwise the reading that fills the measure wins, or the one that contains notes the other dropped.
+  - Then the one that fits the key better.
+  - A clef misread is settled by the pitch centre of the measures both engines agree on.
+- **Markings.** Everything else (dynamics, text, slurs, hairpins, layout) is kept from Audiveris.
+
+**Multi-measure rests** (the H-bar with a bar count above it) get special handling:
+- **The problem.** Both engines see the bar but misread the number: Audiveris reads only single digits, so 12
+  becomes 2, and homr guesses.
+- **The detector.** `app/services/omr/multirest.py` finds the bars on the page image: a thick bar on the
+  staff's middle line, with short serifs and no stems. It reads the count by template matching against music-font
+  digits (Bravura and Leland, both SIL OFL and vendored in `app/services/omr/fonts`) plus bold text fonts.
+- **Merging.** Each engine's encoding is collapsed to one "rest block" before merging (`core/multirest.py`). The
+  block is then expanded to N real measures, marked `<multiple-rest>`, so measure numbers, transposition and MIDI
+  stay correct. Counts that couldn't be read from the page are listed for review.
+- **Output.** MuseScore engraves the result as multi-measure rests, like a printed part, and the preview shows
+  them as H-bars.
+
+**Title, composer, instrument.**
+- Title and composer are read by OCR. They appear under *Detected* and can be edited with "Edit detected
+  information".
+- The transposed part gets a standard header: the title centred, the composer on the right, and the instrument
+  name on the left (e.g. "Alto Saxophone in E♭"), as on printed parts.
+- The original instrument is suggested from the part name read on the page.
+- Scan-specific page size, staff spacing and line breaks are dropped, so the part is laid out cleanly on A4. The
+  local file path Audiveris writes into its output is removed.
+
+Hard-evidence fixes are applied silently. Judgement calls (both readings complete but different, or a clef
+disagreement) are listed once per measure for review, and every signature correction is listed where it starts.
+Multi-staff parts (piano) use Audiveris only. If homr is not installed, recognition falls back to Audiveris alone.
+
+**Measured accuracy.** These figures come from `backend/benchmarks/`: two synthetic scores, each engraved by
+MuseScore and also degraded into a "scan" (200 DPI, skewed, blurred, noisy, JPEG). They include meter changes
+(4/4, 3/4, 6/8, 9/8, 12/8, 2/2, 5/4, 3/8, C, ¢), key changes up to 5 accidentals, pickups, triplets,
+32nds and ledger lines. Rerun with `cd backend && .venv/bin/python -m benchmarks.compare`.
+
+| Input | Audiveris alone | homr alone | Merged |
+|---|---|---|---|
+| Benchmark 1, clean PDF | 92% notes, 24/31 time sigs | 97%, 10/31 | **100%, 31/31, keys 31/31** |
+| Benchmark 1, degraded scan | 86%, 16/31 | 100%, 16/31 | **100%, 31/31, keys 31/31** |
+| Benchmark 2, clean PDF | 62%, 5/19 | 32%¹, 6/19 | **100%², 19/19, keys 19/19** |
+| Benchmark 2, degraded scan | 40%, 5/19 | 32%¹, 6/19 | **100%², 19/19, keys 19/19** |
+| Benchmark 3 (part with 12/4/2-bar rests), clean and scan | 11 of 24 measures (12-bar rest read as 2) | rest counts 8/4/6 | **24/24 measures, 100%, rests 12/4/2** |
+
+¹ homr inserts phantom measures, which shift every following measure in a by-index comparison.
+² The scorer reports 98.5%: the single "miss" is an invisible padding rest in the ground-truth file, which is not
+printed on the page.
+
+These are synthetic scores. Real publisher scans will score lower, and measuring them is the next step (see RUNNING.md).
 
 Processing steps:
-1. **Input.** PDFs are checked for embedded MusicXML attachments, which are used directly with no OMR. Otherwise
-   pages are rasterised at 300 DPI. Images get EXIF orientation applied.
+1. **Input.** PDFs are checked for embedded MusicXML attachments, which are used directly with no OMR.
+   Otherwise, an untouched PDF is handed to Audiveris directly; it renders vector PDFs best. Pages that needed
+   image fixes are passed as a lossless multi-page TIFF. An earlier PDF-rewrapping approach cut accuracy from
+   92% to 60%.
 2. **Preprocessing** (OpenCV):
    - manual rotation and crop
-   - automatic 90° rotation (staff lines must be horizontal)
+   - automatic 90° rotation
    - perspective correction for photographs
-   - deskew (Hough lines)
-   - denoise and contrast normalisation (CLAHE)
+   - deskew
+   - denoise and CLAHE contrast
    - adaptive binarisation for photos
    - resolution normalisation from the detected staff spacing
    - blank-page detection
    - low-resolution warnings
-3. **Recognition.** Pages are bundled into one book and run through `Audiveris -batch -export -save` in a
-   subprocess with a timeout. Multi-movement output is joined in order.
-4. **Confidence.** The saved `.omr` project contains a grade for every recognized symbol. For each note, the
-   app takes the minimum of its chord, notehead and accidental grades, and maps it onto the MusicXML note by
-   measure → voice → time-slot order. Header grades give clef, key and time confidence. Measures whose rhythm
-   doesn't add up are also flagged.
-5. **Review.** Only uncertain items are listed. They're highlighted orange or red in the recognized score;
-   clicking a note opens the editor (pitch, accidental, octave, duration, dots, rest, remove from chord).
-   "Edit detected information" fixes the key, time signature or clef. All corrections are stored as an undoable
-   list and replayed onto the untouched original.
+3. **Recognition.** Audiveris (`-batch -export -save`) and homr run in parallel subprocesses with timeouts.
+   homr runs from its own virtualenv (`tools/homr-venv`), so its ML dependencies never touch the backend.
+4. **OCR.** Audiveris reads text with Tesseract. The English language file must be installed in Audiveris's
+   `tessdata` folder; `scripts/setup.sh` does this. Without it, titles, composer and other text are silently
+   lost. The app header warns when it's missing.
+5. **Confidence.** For each note, the app takes the minimum of the Audiveris grades for its chord, notehead and
+   accidental (from the `.omr` project), mapped by measure → voice → time slot. The merge then adjusts it:
+   - agreed measures: 0.97
+   - resolved by hard evidence: 0.85
+   - judgement calls: 0.6, so they're shown for review
+6. **Review.** Uncertain measures and notes are listed and highlighted orange or red. Clicking a note opens the
+   editor (pitch, accidental, octave, duration, dots, rest, remove from chord), and "Edit detected information"
+   fixes the key, time or clef. All corrections are stored as an undoable list and replayed onto the untouched
+   original.
 
 ## Transposition algorithm
 
@@ -363,7 +437,7 @@ scripts/test.sh                     # everything
 cd backend && .venv/bin/python -m pytest -q
 ```
 
-72 automated tests:
+94 automated tests (plus the OMR benchmark in `backend/benchmarks/`):
 
 - **Golden corpus**: 19 cases in `tests/fixtures/golden/`, each an input MusicXML plus a hand-written expected
   MusicXML. They cover C→Bb, C→Eb, Bb→Eb, Eb→Bb, F→Bb, Bb→C, C→F, tenor sax → concert, the key pairs
@@ -379,6 +453,13 @@ cd backend && .venv/bin/python -m pytest -q
   entities are not expanded; `.mxl` is supported; analysis is checked.
 - **API**: the full workflow, range actions with undo, corrections, upload rejection, project CRUD, PDF,
   MusicXML, PNG and MIDI export. The MIDI test asserts **sounding** pitch.
+- **Two-engine merge**: dropped notes under a wrong meter, measures one engine missed, phantom measures,
+  key-change evidence, clef misreads, markings preserved, multi-staff fallback.
+- **Multi-measure rests and metadata**:
+  - collapse and expand for both engines' encodings
+  - the page detector reading counts from 2 to 105, while ignoring beams
+  - title and composer from credits, the header credits, and the title/composer correction
+  - an engraved part with 12/4/2-bar rests, end to end
 - **Real OMR end-to-end**: a known score is engraved to PNG by MuseScore, recognized by Audiveris, then
   transposed and validated. This test is skipped when Audiveris or MuseScore is missing.
 
@@ -403,6 +484,11 @@ reverse proxy before exposing it to the internet.
 
 ## Known limitations
 
+- **Text and some markings.** Tempo words ("Allegro moderato") are usually not recognized, although the metronome
+  mark is. Hairpins and rehearsal marks are often missed on poor scans. These come only from Audiveris; homr
+  doesn't read them.
+- **The two-engine merge applies to single-staff parts only.** Piano and other multi-staff parts use Audiveris
+  alone.
 - **OMR accuracy depends on the input.** Clean printed or engraved scores work well. Handwritten music,
   heavily damaged scans and low-resolution photos often don't. Audiveris may also miss text-based elements:
   tempo marks such as "♩ = 96", part names and titles were not recognized in testing. That is why the review

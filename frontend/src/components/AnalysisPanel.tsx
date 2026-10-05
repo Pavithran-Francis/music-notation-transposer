@@ -28,6 +28,8 @@ export function AnalysisPanel({ analysis, recognition, source, instruments, clef
   const [mode, setMode] = useState(analysis.key_mode === 'minor' ? 'minor' : 'major')
   const [time, setTime] = useState(analysis.time ?? '4/4')
   const [clef, setClef] = useState('')
+  const [title, setTitle] = useState(analysis.title)
+  const [composer, setComposer] = useState(analysis.composer)
   const review = recognition?.review
   const summary = review?.summary
   const issues = review?.items ?? []
@@ -40,6 +42,9 @@ export function AnalysisPanel({ analysis, recognition, source, instruments, clef
     if (time !== analysis.time) {
       const [b, t] = time.split('/').map(Number)
       if (b && t) await onCorrect({ op: 'set_time', measure_index: 0, beats: b, beat_type: t })
+    }
+    if (title !== analysis.title || composer !== analysis.composer) {
+      await onCorrect({ op: 'set_metadata', title, composer })
     }
     if (clef) {
       await onCorrect({ op: 'set_clef', measure_index: 0, staff: 1, clef, part_id: analysis.parts[0]?.id })
@@ -56,15 +61,18 @@ export function AnalysisPanel({ analysis, recognition, source, instruments, clef
         </button>
       </div>
       {recognition?.engine && <p className="small muted">Source: {recognition.engine}</p>}
+      {recognition?.merge?.applied && <p className="small muted">{recognition.merge.summary}</p>}
       {!editing ? (
         <dl className="facts">
-          {analysis.title && <><dt>Title</dt><dd>{analysis.title}</dd></>}
+          <dt>Title</dt><dd>{analysis.title || <em className="muted">not found — add it with “Edit detected information”</em>}</dd>
+          <dt>Composer</dt><dd>{analysis.composer || <em className="muted">not found</em>}</dd>
           <dt>Original instrument</dt><dd>{srcName ?? <em className="muted">not selected</em>}</dd>
           <dt>Clef</dt><dd>{analysis.clef}</dd>
           <dt>Key signature</dt><dd>{analysis.key}{analysis.key_changes.length > 0 && <span className="muted small"> (+{analysis.key_changes.length} change{analysis.key_changes.length > 1 ? 's' : ''})</span>}</dd>
           <dt>Time signature</dt><dd>{analysis.time ?? '—'}</dd>
           <dt>Tempo</dt><dd>{analysis.tempo ? `${analysis.tempo} BPM` : '—'}</dd>
           <dt>Measures</dt><dd>{analysis.measures}</dd>
+          {analysis.multirests?.length > 0 && <><dt>Multi-measure rests</dt><dd>{analysis.multirests.map((r) => `${r.bars} bars (m. ${r.measure})`).join(', ')}</dd></>}
           <dt>Detected notes</dt><dd>{analysis.notes} <span className="muted small">({analysis.rests} rests, {analysis.chords} chords, {analysis.voices} voice{analysis.voices !== 1 ? 's' : ''})</span></dd>
           {pageCount > 0 && <><dt>Pages</dt><dd>{pageCount}</dd></>}
           <dt>Parts</dt><dd>{analysis.parts.map((p) => p.name || p.id).join(', ')}</dd>
@@ -73,6 +81,8 @@ export function AnalysisPanel({ analysis, recognition, source, instruments, clef
       ) : (
         <div className="edit-detected">
           <div className="grid-2">
+            <label>Title<input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={300} /></label>
+            <label>Composer<input value={composer} onChange={(e) => setComposer(e.target.value)} maxLength={300} /></label>
             <label>Key signature
               <select value={key} onChange={(e) => setKey(Number(e.target.value))}>
                 {KEYS.map(([f, n]) => <option key={f} value={f}>{n}</option>)}

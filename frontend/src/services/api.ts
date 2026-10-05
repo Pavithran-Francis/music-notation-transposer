@@ -73,6 +73,7 @@ export interface Analysis {
   key_changes: { measure: string; key: string }[]
   time_changes: { measure: string; time: string | null }[]
   features: Record<string, number>
+  multirests: { part_id: string; measure: string; bars: number }[]
 }
 
 export interface ReviewItem {
@@ -93,6 +94,7 @@ export interface ReviewItem {
 export interface Recognition {
   engine: string | null
   warnings: string[]
+  merge?: { applied: boolean; summary: string; reason: string } | null
   pages: { index: number; blank: boolean; warnings: string[]; actions: string[] }[]
   review?: {
     items: ReviewItem[]
@@ -219,7 +221,7 @@ export interface NoteDetails {
 
 export interface Health {
   status: string
-  omr: { engine: string; available: boolean }
+  omr: { engine: string; available: boolean; secondary: string | null; ocr_languages: string[] }
   musescore: { available: boolean }
   renderer: string
   limits: { max_upload_mb: number; max_pdf_pages: number }

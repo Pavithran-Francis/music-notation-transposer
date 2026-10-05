@@ -73,6 +73,9 @@ export default function App() {
           {health && (
             <span className="status-pills">
               <span className={`pill ${health.omr.available ? 'ok' : 'bad'}`}>OMR: {health.omr.available ? health.omr.engine : 'not installed'}</span>
+              {health.omr.available && health.omr.ocr_languages.length === 0 && (
+                <span className="pill bad" title="Install OCR language data (scripts/setup.sh) so titles and text are recognized">No OCR text</span>
+              )}
               <span className="pill ok">Engraving: {health.renderer}</span>
             </span>
           )}
